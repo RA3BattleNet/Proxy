@@ -10,7 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 var logger = LoggerFactory.Create(builder => builder.AddNLog()).CreateLogger("Proxy");
-var result = await Dns.GetHostAddressesAsync("peerchat.ra3battle.net");
+var result = await Dns.GetHostAddressesAsync("101.34.40.247");
 IPAddress serverAddress = result.First();
 await await Task.WhenAny(new[]
 {
@@ -49,6 +49,7 @@ async Task HandleConnection(TcpClient client, int port)
         using var server = new TcpClient();
         await server.ConnectAsync(serverAddress, port);
         await Task.WhenAll(CopyStream(client.GetStream(), server.GetStream()), CopyStream(server.GetStream(), client.GetStream()));
+        logger.LogInformation("Connection from {remoteEndPoint} to {port} closed", client.Client.RemoteEndPoint, port);
     }
     catch (Exception e)
     {
@@ -56,6 +57,7 @@ async Task HandleConnection(TcpClient client, int port)
     }
     finally
     {
+        logger.LogInformation("Finished handling connection from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
         client.Close();
     }
 }
