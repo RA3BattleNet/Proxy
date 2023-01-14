@@ -1,7 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
+using NLog;
 using NLog.Extensions.Logging;
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -11,22 +13,22 @@ var logger = LoggerFactory.Create(builder => builder.AddNLog()).CreateLogger("Pr
 string serverAddress = "localhost";
 _ = RunTcpProxy(18840); // EA FESL login
 _ = RunTcpProxy(16667); // Peerchat
-_ = RunUdpUploadProxy(27900); // HeartbeatMaster
+_ = RunUdpProxy(27900); // HeartbeatMaster
 _ = RunTcpProxy(28910); // QueryMaster
 _ = RunTcpProxy(29900); // GPCM
 _ = RunTcpProxy(10186); // Balancer
 _ = RunTcpProxy(28942); // Replay
 
-async Task RunTcpProxy(int port, int? translatedPort = default)
+async Task RunTcpProxy(int port, int? serverPort = default)
 {
-    var tcpListener = new TcpListener(IPAddress.Any, port);
+    var tcpListener = TcpListener.Create(port);
     tcpListener.Start();
     while (true)
     {
         try
         {
             var client = await tcpListener.AcceptTcpClientAsync();
-            _ = HandleConnection(client, translatedPort ?? port);
+            _ = HandleConnection(client, serverPort ?? port);
         }
         catch (Exception e)
         {
@@ -68,103 +70,112 @@ async Task CopyStream(NetworkStream receiveFrom, NetworkStream sendTo)
     }
 }
 
-async Task RunUdpUploadProxy(int port, int? translatedPort = default)
+async Task RunUdpProxy(int port, int? serverPort = default)
 {
-    var @lock = new object();
-    var udpClient = new UdpClient(port);
-    var responses = new Dictionary<IPEndPoint, Memory<byte>>();
-    Action? cancelReceive = null;
-    void SetResponse(IPEndPoint remoteEndPoint, Memory<byte> response)
-    {
-        lock (@lock)
-        {
-            responses[remoteEndPoint] = response;
-            cancelReceive?.Invoke();
-        }
-    }
-    async Task SendResponses()
-    {
-        Dictionary<IPEndPoint, Memory<byte>> currentResponses;
-        lock (@lock)
-        {
-            if (responses.Count == 0)
-            {
-                return;
-            }
-            currentResponses = responses;
-            responses = new();
-        }
-        foreach (var (endPoint, response) in currentResponses)
-        {
-            try
-            {
-                await udpClient.SendAsync(response.ToArray(), response.Length, endPoint);
-            }
-            catch (Exception e)
-            {
-                logger.LogError(e, "Error sending response to {endPoint}", endPoint);
-            }
-        }
-    }
-
+    var proxy = new UdpProxy(new(IPAddress.Parse(serverAddress), serverPort ?? port), port);
+    Memory<byte> data = new byte[2048];
     while (true)
     {
         try
         {
-            using var cancellation = new CancellationTokenSource();
-            void CancelThisReceive() => cancellation.Cancel();
-            UdpReceiveResult received;
-            try
-            {
-                lock (@lock)
-                {
-                    cancelReceive += CancelThisReceive;
-                    if (responses.Count > 0)
-                    {
-                        cancelReceive();
-                    }
-                }
-                received = await udpClient.ReceiveAsync(cancellation.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                await SendResponses();
-                return;
-            }
-            finally
-            {
-                lock (@lock)
-                {
-                    cancelReceive -= CancelThisReceive;
-                }
-            }
-            _ = HandleUdpUpload(received.Buffer, received.RemoteEndPoint, translatedPort ?? port, response =>
-            {
-                _ = SetResponse(received.RemoteEndPoint, response);
-            });
+            await proxy.HandleIncomingUserData(data);
         }
         catch (Exception e)
         {
-            logger.LogError(e, "Error accepting connection");
+            logger.LogError(e, "Error handling connection to {port}", port);
         }
     }
 }
 
-async Task HandleUdpUpload(ReadOnlyMemory<byte> buffer, IPEndPoint remoteEndPoint, int port, Action<Memory<byte>> setResponse)
+class UdpProxy
 {
-    logger.LogInformation("Handling connection from {remoteEndPoint} to {port}", remoteEndPoint, port);
-    try
+    private record Connection(Task<Socket> Socket, DateTimeOffset LastUpdateTime, CancellationTokenSource Cancellation)
     {
-        using var server = new UdpClient();
-        await server.SendAsync(buffer);
-        // 假如 5 秒之内有回复，就把收到的第一个回复发回去
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var result = await server.ReceiveAsync(timeout.Token);
-        setResponse(result.Buffer.AsMemory(0, result.Buffer.Length));
+        public Connection Update() => this with { LastUpdateTime = DateTimeOffset.UtcNow };
     }
-    catch (OperationCanceledException) { }
-    catch (Exception e)
+    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
+    private static readonly IPEndPoint Template = new(IPAddress.IPv6Any, 0);
+    private readonly IPEndPoint _server;
+    private readonly Socket _toUser = new(SocketType.Dgram, ProtocolType.Udp);
+    private readonly ConcurrentDictionary<EndPoint, Connection> _connections = new();
+
+    public UdpProxy(IPEndPoint server, int toUserPort)
     {
-        logger.LogError(e, "Error handling connection from {remoteEndPoint} to {port}", remoteEndPoint, port);
+        _server = server;
+        _toUser.Bind(new IPEndPoint(IPAddress.IPv6Any, toUserPort));
+        _ = Task.Run(PruneConnections);
+    }
+
+    public async Task HandleIncomingUserData(Memory<byte> data, CancellationToken cancel = default)
+    {
+        var r = await _toUser.ReceiveFromAsync(data, SocketFlags.None, Template, cancel);
+        Logger.Info("Forwarding {bytes} bytes from {user} to real server", r.ReceivedBytes, r.RemoteEndPoint);
+        var c = _connections.AddOrUpdate(r.RemoteEndPoint, NewConnection, (_, c) => c.Update());
+        await (await c.Socket).SendAsync(data[..r.ReceivedBytes], SocketFlags.None, cancel);
+    }
+
+    private Connection NewConnection(EndPoint user)
+    {
+        static async Task<Socket> GetSocket(IPEndPoint server, CancellationToken cancellationToken)
+        {
+            var socket = new Socket(SocketType.Dgram, ProtocolType.Udp);
+            await socket.ConnectAsync(server, cancellationToken);
+            return socket;
+        }
+        var cancellation = new CancellationTokenSource();
+        var cancellationToken = cancellation.Token;
+        var futureSocket = GetSocket(_server, cancellationToken);
+        _ = Task.Run(async () =>
+        {
+            Memory<byte> buffer = new byte[2048];
+            try
+            {
+                var socket = await futureSocket;
+                while (true)
+                {
+                    var receivedSize = await socket.ReceiveAsync(buffer, SocketFlags.None, cancellationToken);
+                    Logger.Info("Received {bytes} bytes from real server for {user}", receivedSize, user);
+                    _ = _connections.AddOrUpdate(user,
+                        _ => throw new InvalidOperationException($"AddOrUpdate called for dead connection to {user}"),
+                        (_, c) => c.Update());
+                    await _toUser.SendToAsync(buffer[..receivedSize], SocketFlags.None, user, cancellationToken);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex is not OperationCanceledException)
+                {
+                    Logger.Error(ex, "Error handling connection from {user}", user);
+                }
+            }
+        }, cancellationToken);
+        return new(futureSocket, DateTimeOffset.UtcNow, cancellation);
+    }
+
+    private async Task PruneConnections()
+    {
+        while (true)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var toBeRemoved = _connections
+                .Where(kv => now - kv.Value.LastUpdateTime > TimeSpan.FromMinutes(1))
+                .Select(kv => kv.Key)
+                .ToArray();
+            foreach (var key in toBeRemoved)
+            {
+                if (_connections.TryRemove(key, out var connection))
+                {
+                    try
+                    {
+                        connection.Cancellation.Cancel();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error(ex, "Error removing connection to {user}", key);
+                    }
+                }
+            }
+            await Task.Delay(TimeSpan.FromMinutes(1));
+        }
     }
 }
