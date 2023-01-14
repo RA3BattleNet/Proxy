@@ -11,13 +11,16 @@ using System.Threading.Tasks;
 
 var logger = LoggerFactory.Create(builder => builder.AddNLog()).CreateLogger("Proxy");
 string serverAddress = "localhost";
-_ = RunTcpProxy(18840); // EA FESL login
-_ = RunTcpProxy(16667); // Peerchat
-_ = RunUdpProxy(27900); // HeartbeatMaster
-_ = RunTcpProxy(28910); // QueryMaster
-_ = RunTcpProxy(29900); // GPCM
-_ = RunTcpProxy(10186); // Balancer
-_ = RunTcpProxy(28942); // Replay
+await Task.WhenAny(new[]
+{
+    RunTcpProxy(18840), // EA FESL login
+    RunTcpProxy(16667), // Peerchat
+    RunUdpProxy(27900), // HeartbeatMaster
+    RunTcpProxy(28910), // QueryMaster
+    RunTcpProxy(29900), // GPCM
+    RunTcpProxy(10186), // Balancer
+    RunTcpProxy(28942), // Replay
+});
 
 async Task RunTcpProxy(int port, int? serverPort = default)
 {
