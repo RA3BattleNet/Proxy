@@ -10,8 +10,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 var logger = LoggerFactory.Create(builder => builder.AddNLog()).CreateLogger("Proxy");
-string serverAddress = "localhost";
-await Task.WhenAny(new[]
+var result = await Dns.GetHostAddressesAsync("peerchat.ra3battle.net");
+IPAddress serverAddress = result.First();
+await await Task.WhenAny(new[]
 {
     RunTcpProxy(18840), // EA FESL login
     RunTcpProxy(16667), // Peerchat
@@ -75,7 +76,7 @@ async Task CopyStream(NetworkStream receiveFrom, NetworkStream sendTo)
 
 async Task RunUdpProxy(int port, int? serverPort = default)
 {
-    var proxy = new UdpProxy(new(IPAddress.Parse(serverAddress), serverPort ?? port), port);
+    var proxy = new UdpProxy(new(serverAddress, serverPort ?? port), port);
     Memory<byte> data = new byte[2048];
     while (true)
     {
