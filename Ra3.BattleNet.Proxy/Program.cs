@@ -48,7 +48,7 @@ async Task HandleConnection(TcpClient client, int port)
     {
         using var server = new TcpClient();
         await server.ConnectAsync(serverAddress, port);
-        await Task.WhenAll(CopyStream(client.GetStream(), server.GetStream()), CopyStream(server.GetStream(), client.GetStream()));
+        await Task.WhenAll(CopyStream(client.Client, server.Client), CopyStream(server.Client, client.Client));
         logger.LogInformation("Connection from {remoteEndPoint} to {port} closed", client.Client.RemoteEndPoint, port);
     }
     catch (Exception e)
@@ -62,17 +62,18 @@ async Task HandleConnection(TcpClient client, int port)
     }
 }
 
-async Task CopyStream(NetworkStream receiveFrom, NetworkStream sendTo)
+async Task CopyStream(Socket receiveFrom, Socket sendTo)
 {
-    var buffer = new byte[4096];
+    Memory<byte> buffer = new byte[4096];
     while (true)
     {
-        var read = await receiveFrom.ReadAsync(buffer);
+        var read = await receiveFrom.ReceiveAsync(buffer, SocketFlags.None);
+        logger.LogInformation("Received {bytes} bytes from {remote}", read, receiveFrom.RemoteEndPoint);
         if (read == 0)
         {
             break;
         }
-        await sendTo.WriteAsync(buffer.AsMemory(0, read));
+        await sendTo.SendAsync(buffer[..read], SocketFlags.None);
     }
 }
 
