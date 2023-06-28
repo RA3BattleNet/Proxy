@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,6 +31,7 @@ using System.Threading.Tasks;
 Configuration? config;
 string logLevel;
 Microsoft.Extensions.Logging.ILogger logger;
+byte[] peerchatLoginToken = Encoding.UTF8.GetBytes("CRYPT des 1 redalert3pc");
 try
 {
     var configFile = await File.ReadAllTextAsync("config.json");
@@ -96,7 +98,14 @@ async Task RunTcpProxy(IPAddress serverAddress, int port, int? serverPort = defa
         try
         {
             var client = await tcpListener.AcceptTcpClientAsync();
-            _ = HandleConnection(logger, serverAddress, client, serverPort ?? port);
+            if (port != config.PeerchatPort)
+            {
+                _ = HandleConnection(logger, serverAddress, client, serverPort ?? port);
+            }
+            else
+            {
+                _ = HandlePeerchatConnection(logger, serverAddress, client, serverPort ?? port);
+            }
         }
         catch (Exception e)
         {
@@ -116,6 +125,48 @@ async Task HandleConnection(Logger logger, IPAddress serverAddress, TcpClient cl
         await Task.WhenAll(CopyStream(logger, client.Client, server.Client, cancelOnError),
                            CopyStream(logger, server.Client, client.Client, cancelOnError));
         logger.Info("Connection from {remoteEndPoint} to {port} closed", client.Client.RemoteEndPoint, port);
+    }
+    catch (Exception e)
+    {
+        logger.Error(e, "Error handling connection from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
+    }
+    finally
+    {
+        client.Close();
+    }
+}
+
+async Task HandlePeerchatConnection(Logger logger, IPAddress serverAddress, TcpClient client, int port)
+{
+    logger.Info("Handling peerchat connection from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
+    try
+    {
+        using var server = new TcpClient();
+        await server.ConnectAsync(serverAddress, port);
+        Memory<byte> buffer = new byte[64];
+        try
+        {
+            var bytesReceived = await client.Client.ReceiveAsync(buffer, SocketFlags.None);
+            buffer = buffer[..bytesReceived];
+            if (!buffer.Span.StartsWith(peerchatLoginToken))
+            {
+                logger.Error("Invalid peerchat login token received from {remoteEndPoint}, aborting connection", client.Client.RemoteEndPoint);
+                return;
+            }
+            await client.Client.SendAsync(peerchatLoginToken, SocketFlags.None);
+            var ipEndPoint = client.Client.RemoteEndPoint as IPEndPoint
+                ?? throw new InvalidOperationException("No IPEndPoint in peerchat connection");
+            await client.Client.SendAsync(Encoding.UTF8.GetBytes($" {ipEndPoint.Address}"), SocketFlags.None);
+            await client.Client.SendAsync(buffer[peerchatLoginToken.Length..], SocketFlags.None);
+        }
+        catch (Exception e)
+        {
+            logger.Error(e, "Error handling peerchat connection from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
+        }
+        using var cancelOnError = new CancellationTokenSource();
+        await Task.WhenAll(CopyStream(logger, client.Client, server.Client, cancelOnError),
+                           CopyStream(logger, server.Client, client.Client, cancelOnError));
+        logger.Info("Peerchat connection from {remoteEndPoint} to {port} closed", client.Client.RemoteEndPoint, port);
     }
     catch (Exception e)
     {
@@ -152,7 +203,7 @@ async Task CopyStream(Logger logger, Socket receiveFrom, Socket sendTo, Cancella
     }
 }
 
-record Configuration(string ActualServer, ProxyConfiguration[] Proxies, string? LogLevel = default);
+record Configuration(string ActualServer, ProxyConfiguration[] Proxies, int PeerchatPort, string? LogLevel = default);
 
 record ProxyConfiguration(string Type, int Port, int? ServerPort = default);
 
