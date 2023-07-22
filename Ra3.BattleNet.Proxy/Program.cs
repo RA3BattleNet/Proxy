@@ -158,7 +158,10 @@ async Task HandlePeerchatConnection(Logger logger, IPAddress serverAddress, TcpC
             var ipEndPoint = client.Client.RemoteEndPoint as IPEndPoint
                 ?? throw new InvalidOperationException("No IPEndPoint in peerchat connection");
             var bytes = peerchatLoginToken.Concat(Encoding.UTF8.GetBytes($" {ipEndPoint.Address}")).Concat(buffer[peerchatLoginToken.Length..].ToArray());
-            await client.Client.SendAsync(bytes.ToArray(), SocketFlags.None);
+
+            logger.Info(Encoding.UTF8.GetString(bytes.ToArray()));
+            var rc = await client.Client.SendAsync(bytes.ToArray(), SocketFlags.None);
+            logger.Info(rc);
         }
         catch (Exception e)
         {
