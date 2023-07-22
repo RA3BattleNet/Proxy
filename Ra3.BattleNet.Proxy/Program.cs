@@ -144,29 +144,29 @@ async Task HandlePeerchatConnection(Logger logger, IPAddress serverAddress, TcpC
     {
         using var server = new TcpClient();
         await server.ConnectAsync(serverAddress, port);
-        Memory<byte> buffer = new byte[64];
-        try
-        {
-            var bytesReceived = await client.Client.ReceiveAsync(buffer, SocketFlags.None);
-            buffer = buffer[..bytesReceived];
-            if (!buffer.Span.StartsWith(peerchatLoginToken))
-            {
-                logger.Error("Invalid peerchat login token received from {remoteEndPoint}, aborting connection", client.Client.RemoteEndPoint);
-                return;
-            }
-            logger.Info("Modify peerchat connection header from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
-            var ipEndPoint = client.Client.RemoteEndPoint as IPEndPoint
-                ?? throw new InvalidOperationException("No IPEndPoint in peerchat connection");
-            var bytes = peerchatLoginToken.Concat(Encoding.UTF8.GetBytes($" {ipEndPoint.Address}")).Concat(buffer[peerchatLoginToken.Length..].ToArray());
+        //Memory<byte> buffer = new byte[64];
+        //try
+        //{
+        //    var bytesReceived = await client.Client.ReceiveAsync(buffer, SocketFlags.None);
+        //    buffer = buffer[..bytesReceived];
+        //    if (!buffer.Span.StartsWith(peerchatLoginToken))
+        //    {
+        //        logger.Error("Invalid peerchat login token received from {remoteEndPoint}, aborting connection", client.Client.RemoteEndPoint);
+        //        return;
+        //    }
+        //    logger.Info("Modify peerchat connection header from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
+        //    var ipEndPoint = client.Client.RemoteEndPoint as IPEndPoint
+        //        ?? throw new InvalidOperationException("No IPEndPoint in peerchat connection");
+        //    var bytes = peerchatLoginToken.Concat(Encoding.UTF8.GetBytes($" {ipEndPoint.Address}")).Concat(buffer[peerchatLoginToken.Length..].ToArray());
 
-            logger.Info(Encoding.UTF8.GetString(bytes.ToArray()));
-            var rc = await client.Client.SendAsync(bytes.ToArray(), SocketFlags.None);
-            logger.Info(rc);
-        }
-        catch (Exception e)
-        {
-            logger.Error(e, "Error handling peerchat connection from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
-        }
+        //    logger.Info(Encoding.UTF8.GetString(bytes.ToArray()));
+        //    var rc = await client.Client.SendAsync(bytes.ToArray(), SocketFlags.None);
+        //    logger.Info(rc);
+        //}
+        //catch (Exception e)
+        //{
+        //    logger.Error(e, "Error handling peerchat connection from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
+        //}
         logger.Info("Peerchat connection from {remoteEndPoint} to {port} continue", client.Client.RemoteEndPoint, port);
         using var cancelOnError = new CancellationTokenSource();
         await Task.WhenAll(CopyStream(logger, client.Client, server.Client, cancelOnError),
