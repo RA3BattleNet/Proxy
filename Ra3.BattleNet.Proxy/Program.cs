@@ -25,7 +25,8 @@ using System.Threading.Tasks;
     { "type": "tcp", "port": 29900 }, // GPCM
     { "type": "tcp", "port": 10186 }, // Balancer
     { "type": "tcp", "port": 28942 }, // Replay
-  ]
+  ],
+  "peerchatPort": 16667
 }
 */
 Configuration? config;
@@ -153,16 +154,19 @@ async Task HandlePeerchatConnection(Logger logger, IPAddress serverAddress, TcpC
                 logger.Error("Invalid peerchat login token received from {remoteEndPoint}, aborting connection", client.Client.RemoteEndPoint);
                 return;
             }
+            logger.Info("Modify peerchat connection header from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
             await client.Client.SendAsync(peerchatLoginToken, SocketFlags.None);
             var ipEndPoint = client.Client.RemoteEndPoint as IPEndPoint
                 ?? throw new InvalidOperationException("No IPEndPoint in peerchat connection");
             await client.Client.SendAsync(Encoding.UTF8.GetBytes($" {ipEndPoint.Address}"), SocketFlags.None);
+            logger.Info("Send remaining peerchat connection header from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
             await client.Client.SendAsync(buffer[peerchatLoginToken.Length..], SocketFlags.None);
         }
         catch (Exception e)
         {
             logger.Error(e, "Error handling peerchat connection from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
         }
+        logger.Info("Peerchat connection from {remoteEndPoint} to {port} continue", client.Client.RemoteEndPoint, port);
         using var cancelOnError = new CancellationTokenSource();
         await Task.WhenAll(CopyStream(logger, client.Client, server.Client, cancelOnError),
                            CopyStream(logger, server.Client, client.Client, cancelOnError));
