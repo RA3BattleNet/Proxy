@@ -157,11 +157,12 @@ async Task HandlePeerchatConnection(Logger logger, IPAddress serverAddress, TcpC
             logger.Info("Modify peerchat connection header from {remoteEndPoint} to {port}", client.Client.RemoteEndPoint, port);
             var ipEndPoint = client.Client.RemoteEndPoint as IPEndPoint
                 ?? throw new InvalidOperationException("No IPEndPoint in peerchat connection");
-            var bytes = peerchatLoginToken.Concat(Encoding.UTF8.GetBytes($" {ipEndPoint.Address}")).Concat(buffer[peerchatLoginToken.Length..].ToArray());
+            var ipString = $"{ipEndPoint.Address}";
+            ipString = ipString.Replace("::ffff:", "");
+            var bytes = peerchatLoginToken.Concat(Encoding.UTF8.GetBytes(ipString)).Concat(buffer[peerchatLoginToken.Length..].ToArray());
 
-            logger.Info(Encoding.UTF8.GetString(bytes.ToArray()));
-            var rc = await client.Client.SendAsync(bytes.ToArray(), SocketFlags.None);
-            logger.Info(rc);
+            logger.Info($"Modified peerchat message: {Encoding.UTF8.GetString(bytes.ToArray())}");
+            await server.Client.SendAsync(bytes.ToArray(), SocketFlags.None);
         }
         catch (Exception e)
         {
