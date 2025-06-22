@@ -192,6 +192,9 @@ async Task CopyStream(Logger logger, Socket receiveFrom, Socket sendTo, Cancella
         Memory<byte> buffer = new byte[4096];
         while (true)
         {
+            // repeated calls of CancelAfter will reset the timer every time
+            // https://learn.microsoft.com/en-us/dotnet/api/system.threading.cancellationtokensource.cancelafter?view=net-9.0#system-threading-cancellationtokensource-cancelafter(system-timespan)
+            cancelOnError.CancelAfter(TimeSpan.FromMinutes(30));
             var read = await receiveFrom.ReceiveAsync(buffer, SocketFlags.None, cancellationToken);
             logger.Debug("Received {bytes} bytes from {remote}", read, receiveFrom.RemoteEndPoint);
             if (read == 0)
